@@ -34,7 +34,7 @@
     background-color: #fff;
 }
 .chat-input input {
-    width:  70%;    
+    width:  85%;    
     padding: 10px;
     border: 1px solid #ccc;
     border-radius: 5px;
@@ -48,15 +48,7 @@
     border-radius: 5px;
     cursor: pointer;
 }
-.chat-input button2 {
-    padding: 10px 20px;
-    margin-left: 10px;
-    background-color: #3765aa;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-}
+
 .message {
     padding: 10px;
     margin-bottom: 8px;
