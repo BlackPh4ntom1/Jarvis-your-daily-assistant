@@ -6,9 +6,12 @@ import useSpeechToText from './component/SpeechToText.jsx';
 
 function App() {
   const [messages, setMessages] = useState([
-    { text: "Hello! How can I assist you today?", sender: "bot" }
+    { text: "Hello! I'm Jarvis. How can I assist you today?", sender: "bot" }
   ])
   const [input, setInput] = useState("")
+  
+  // Generate unique session ID for this conversation
+  const [sessionId] = useState(() => 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9));
   
   // Enhanced speech-to-text with wake command
   const { 
@@ -20,11 +23,31 @@ function App() {
     wakeCommand,
     toggleListening, 
     clearTranscript
-  } = useSpeechToText('hey jarvis'); // Custom wake command for your Jarvis chat
+  } = useSpeechToText('hey jarvis');
   
-  const [isTyping, setIsTyping] = useState(false)  // for typing indicator
-  const bottomRef = useRef(null); // for auto scroll to bottom hook
-  const silenceTimerRef = useRef(null); // Timer for detecting end of speech
+  const [isTyping, setIsTyping] = useState(false)
+  const bottomRef = useRef(null);
+  const silenceTimerRef = useRef(null);
+
+  // Load conversation from localStorage on component mount
+  useEffect(() => {
+    const savedConversation = localStorage.getItem('jarvis_conversation');
+    if (savedConversation) {
+      try {
+        const parsedConversation = JSON.parse(savedConversation);
+        if (parsedConversation && Array.isArray(parsedConversation)) {
+          setMessages(parsedConversation);
+        }
+      } catch (error) {
+        console.error('Error loading conversation from localStorage:', error);
+      }
+    }
+  }, []);
+
+  // Save conversation to localStorage whenever messages change
+  useEffect(() => {
+    localStorage.setItem('jarvis_conversation', JSON.stringify(messages));
+  }, [messages]);
 
   // Auto-start listening when component mounts
   useEffect(() => {
@@ -32,7 +55,7 @@ function App() {
       if (!isListening) {
         toggleListening();
       }
-    }, 50000); // Start listening immediately
+    }, 1000);
 
     return () => clearTimeout(timer);
   }, []);
@@ -42,7 +65,7 @@ function App() {
     if (!isListening && !isTyping) {
       const restartTimer = setTimeout(() => {
         toggleListening();
-      }, 0); // Restart quickly if stopped
+      }, 1000);
 
       return () => clearTimeout(restartTimer);
     }
@@ -64,17 +87,15 @@ function App() {
   // Auto-send when user finishes speaking
   useEffect(() => {
     if (isAwake && transcript && transcript.trim() !== "") {
-      // Clear any existing timer
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
       }
       
-      // Set a new timer - send message after 3 seconds of silence
       silenceTimerRef.current = setTimeout(() => {
         if (transcript.trim() !== "" && !isTyping) {
           handleAutoSend();
         }
-      }, 3000); // 3 seconds of silence before auto-send
+      }, 3000);
     }
 
     return () => {
@@ -84,55 +105,72 @@ function App() {
     };
   }, [transcript, isAwake, isTyping]);
 
-  const handleAutoSend = async () => {
-    if (!transcript || transcript.trim() === "") return;
-    
-    const messageToSend = transcript.trim();
-    setMessages(messages => [...messages, { text: messageToSend, sender: "user" }]);
+  const sendMessageWithContext = async (messageToSend) => {
+    // Add user message to state immediately
+    const newUserMessage = { text: messageToSend, sender: "user" };
+    const updatedMessages = [...messages, newUserMessage];
+    setMessages(updatedMessages);
     setIsTyping(true);
-    setInput("");
-    clearTranscript();
     
     try {
+      console.log('=== FRONTEND DEBUG ===');
+      console.log('Sending message:', messageToSend);
+      console.log('Updated messages length:', updatedMessages.length);
+      console.log('Updated messages:', updatedMessages);
+      console.log('=====================');
+      
+      // Send message with conversation history (including the new user message)
       const response = await fetch("http://localhost:3001/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"                   
         },
-        body: JSON.stringify({ message: messageToSend })
+        body: JSON.stringify({ 
+          message: messageToSend,
+          conversationHistory: updatedMessages, // Send updated conversation history
+          sessionId: sessionId
+        })
       });
+      
       const data = await response.json();
-      setMessages(messages => [...messages, { text: data.message, sender: "bot" }]);
+      
+      // Add bot response to state
+      const newBotMessage = { text: data.message, sender: "bot" };
+      setMessages([...updatedMessages, newBotMessage]);
+      
     } catch (error) {
       console.error("Error sending message:", error);
-      setMessages(messages => [...messages, { text: "Error: Could not send message.", sender: "bot" }]);
+      const errorMessage = { text: "Error: Could not send message. Please try again.", sender: "bot" };
+      setMessages([...updatedMessages, errorMessage]);
     }
+    
     setIsTyping(false);
+  };
+
+  const handleAutoSend = async () => {
+    if (!transcript || transcript.trim() === "") return;
+    
+    const messageToSend = transcript.trim();
+    setInput("");
+    clearTranscript();
+    
+    await sendMessageWithContext(messageToSend);
   };
 
   const handleManualSend = async () => {
     if (input.trim() === "") return;
     
     const messageToSend = input.trim();
-    setMessages(messages => [...messages, { text: messageToSend, sender: "user" }]);
-    setIsTyping(true);
     setInput("");
     
-    try {
-      const response = await fetch("http://localhost:3001/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"                   
-        },
-        body: JSON.stringify({ message: messageToSend })
-      });
-      const data = await response.json();
-      setMessages(messages => [...messages, { text: data.message, sender: "bot" }]);
-    } catch (error) {
-      console.error("Error sending message:", error);
-      setMessages(messages => [...messages, { text: "Error: Could not send message.", sender: "bot" }]);
-    }
-    setIsTyping(false);
+    await sendMessageWithContext(messageToSend);
+  };
+
+  // Clear conversation function (optional - you can add a button for this)
+  const clearConversation = () => {
+    const initialMessage = { text: "Hello! I'm Jarvis. How can I assist you today?", sender: "bot" }; //I will remove this later
+    setMessages([initialMessage]);
+    localStorage.removeItem('jarvis_conversation');
   };
 
   return (
