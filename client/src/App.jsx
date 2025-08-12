@@ -1,13 +1,12 @@
-import { useState } from 'react'
-import {useRef} from 'react'
-import {useEffect} from 'react'
+import { useState, useRef, useEffect } from 'react'
 import './styles/App.css'
 import useSpeechToText from './component/SpeechToText.jsx';
+import AuthPage from './component/Auth.jsx';
 
 function App() {
-  const [messages, setMessages] = useState([
-    { text: "Hello! I'm Jarvis. How can I assist you today?", sender: "bot" }
-  ])
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("")
   
   // Generate unique session ID for this conversation
@@ -29,47 +28,95 @@ function App() {
   const bottomRef = useRef(null);
   const silenceTimerRef = useRef(null);
 
-  // Load conversation from localStorage on component mount
+  // Check for existing authentication on component mount
   useEffect(() => {
-    const savedConversation = localStorage.getItem('jarvis_conversation');
-    if (savedConversation) {
-      try {
-        const parsedConversation = JSON.parse(savedConversation);
-        if (parsedConversation && Array.isArray(parsedConversation)) {
-          setMessages(parsedConversation);
+    const checkAuth = async () => {
+      const savedToken = localStorage.getItem('auth_token');
+      const savedUser = localStorage.getItem('user_info');
+      
+      if (savedToken && savedUser) {
+        try {
+          // Verify token with server
+          const response = await fetch('http://localhost:3001/api/verify-token', {
+            headers: {
+              'Authorization': `Bearer ${savedToken}`
+            }
+          });
+          
+          if (response.ok) {
+            const userData = await response.json();
+            setUser(userData.user);
+            setToken(savedToken);
+            
+            // Set initial message with user's name
+            setMessages([
+              { text: `Hello ${userData.user.username}! I'm Jarvis. How can I assist you today?`, sender: "bot" }
+            ]);
+          } else {
+            // Token is invalid, clear storage
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('user_info');
+            localStorage.removeItem('jarvis_conversation');
+          }
+        } catch (error) {
+          console.error('Auth verification error:', error);
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('user_info');
+          localStorage.removeItem('jarvis_conversation');
         }
-      } catch (error) {
-        console.error('Error loading conversation from localStorage:', error);
+      }
+    };
+    
+    checkAuth();
+  }, []);
+
+  // Load conversation from localStorage when user is authenticated
+  useEffect(() => {
+    if (user) {
+      const savedConversation = localStorage.getItem(`jarvis_conversation_${user.id}`);
+      if (savedConversation) {
+        try {
+          const parsedConversation = JSON.parse(savedConversation);
+          if (parsedConversation && Array.isArray(parsedConversation)) {
+            setMessages(parsedConversation);
+          }
+        } catch (error) {
+          console.error('Error loading conversation from localStorage:', error);
+        }
       }
     }
-  }, []);
+  }, [user]);
 
   // Save conversation to localStorage whenever messages change
   useEffect(() => {
-    localStorage.setItem('jarvis_conversation', JSON.stringify(messages));
-  }, [messages]);
+    if (user && messages.length > 0) {
+      localStorage.setItem(`jarvis_conversation_${user.id}`, JSON.stringify(messages));
+    }
+  }, [messages, user]);
 
-  // Auto-start listening when component mounts
+  // Auto-start listening when user is authenticated
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!isListening) {
-        toggleListening();
-      }
-    }, 1000);
+    if (user) {
+      const timer = setTimeout(() => {
+        if (!isListening) {
+          toggleListening();
+        }
+      }, 1000);
 
-    return () => clearTimeout(timer);
-  }, []);
+      return () => clearTimeout(timer);
+    }
+  }, [user]);
 
   // Auto-restart listening if it stops unexpectedly (continuous listening)
   useEffect(() => {
-    if (!isListening && !isTyping) {
+    if (user && !isListening && !isTyping) {
       const restartTimer = setTimeout(() => {
         toggleListening();
       }, 1000);
 
       return () => clearTimeout(restartTimer);
     }
-  }, [isListening, isTyping]);
+  }, [isListening, isTyping, user]);
 
   // Handle transcript changes for manual input display
   useEffect(() => {
@@ -119,18 +166,25 @@ function App() {
       console.log('Updated messages:', updatedMessages);
       console.log('=====================');
       
-      // Send message with conversation history (including the new user message)
+      // Send message with conversation history and authentication
       const response = await fetch("http://localhost:3001/api/chat", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"                   
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
         },
         body: JSON.stringify({ 
           message: messageToSend,
-          conversationHistory: updatedMessages, // Send updated conversation history
+          conversationHistory: updatedMessages,
           sessionId: sessionId
         })
       });
+      
+      if (response.status === 401 || response.status === 403) {
+        // Token expired or invalid, logout user
+        handleLogout();
+        return;
+      }
       
       const data = await response.json();
       
@@ -166,17 +220,52 @@ function App() {
     await sendMessageWithContext(messageToSend);
   };
 
-  // Clear conversation function (optional - you can add a button for this)
-  const clearConversation = () => {
-    const initialMessage = { text: "Hello! I'm Jarvis. How can I assist you today?", sender: "bot" }; //I will remove this later
-    setMessages([initialMessage]);
-    localStorage.removeItem('jarvis_conversation');
+  const handleLoginSuccess = (userData, authToken) => {
+    setUser(userData);
+    setToken(authToken);
+    setMessages([
+      { text: `Hello ${userData.username}! I'm Jarvis. How can I assist you today?`, sender: "bot" }
+    ]);
   };
 
+  const handleLogout = () => {
+    // Clear all stored data
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('user_info');
+    localStorage.removeItem(`jarvis_conversation_${user?.id}`);
+    
+    // Reset state
+    setUser(null);
+    setToken(null);
+    setMessages([]);
+    setInput("");
+    
+    // Stop listening
+    if (isListening) {
+      toggleListening();
+    }
+  };
+
+  // Clear conversation function
+  const clearConversation = () => {
+    const initialMessage = { text: `Hello ${user.username}! I'm Jarvis. How can I assist you today?`, sender: "bot" };
+    setMessages([initialMessage]);
+    localStorage.removeItem(`jarvis_conversation_${user.id}`);
+  };
+
+  // Show authentication page if user is not logged in
+  if (!user) {
+    return <AuthPage onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  // Show main chat interface if user is authenticated
   return (
     <div className="chat-container">
       <div className="chat-header">
-        <span>Jarvis Chat</span>
+        <div>
+          <span>Jarvis Chat</span>
+          
+        </div>
         <div className="status-indicators">
           <span className={`status-badge ${isAwake ? 'awake' : 'listening'}`}>
             {isAwake ? '🟢 Listening to you...' : '🎤 Say "hey jarvis"'}
@@ -203,6 +292,9 @@ function App() {
       </div>
       
       <div className="chat-input">
+
+        <button1 onClick={handleLogout} className="logout-button">Logout</button1>
+
         <input
           type="text"
           placeholder={isAwake ? "I'm listening... or type here" : 'Say "hey jarvis" or type here'}
