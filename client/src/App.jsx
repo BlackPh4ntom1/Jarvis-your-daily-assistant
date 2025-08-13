@@ -5,7 +5,7 @@ import AuthPage from './component/Auth.jsx';
 
 function App() {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
+  // Removed token state - no longer needed with httpOnly cookies
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("")
   
@@ -31,39 +31,30 @@ function App() {
   // Check for existing authentication on component mount
   useEffect(() => {
     const checkAuth = async () => {
-      const savedToken = localStorage.getItem('auth_token');
-      const savedUser = localStorage.getItem('user_info');
-      
-      if (savedToken && savedUser) {
-        try {
-          // Verify token with server
-          const response = await fetch('http://localhost:3001/api/verify-token', {
-            headers: {
-              'Authorization': `Bearer ${savedToken}`
-            }
-          });
+      try {
+        // Verify token with server using cookies - no need to send token manually
+        const response = await fetch('http://localhost:3001/api/verify-token', {
+          credentials: 'include' // This sends the httpOnly cookie automatically
+        });
+        
+        if (response.ok) {
+          const userData = await response.json();
+          setUser(userData.user);
           
-          if (response.ok) {
-            const userData = await response.json();
-            setUser(userData.user);
-            setToken(savedToken);
-            
-            // Set initial message with user's name
-            setMessages([
-              { text: `Hello ${userData.user.username}! I'm Jarvis. How can I assist you today?`, sender: "bot" }
-            ]);
-          } else {
-            // Token is invalid, clear storage
-            localStorage.removeItem('auth_token');
-            localStorage.removeItem('user_info');
-            localStorage.removeItem('jarvis_conversation');
-          }
-        } catch (error) {
-          console.error('Auth verification error:', error);
-          localStorage.removeItem('auth_token');
-          localStorage.removeItem('user_info');
-          localStorage.removeItem('jarvis_conversation');
+          console.log('✅ User authenticated via httpOnly cookie');
+          
+          // Set initial message with user's name
+          setMessages([
+            { text: `Hello ${userData.user.username}! I'm Jarvis. How can I assist you today?`, sender: "bot" }
+          ]);
+        } else {
+          // No valid cookie or expired - user needs to login
+          console.log('❌ No valid authentication cookie found');
+          setUser(null);
         }
+      } catch (error) {
+        console.error('Auth verification error:', error);
+        setUser(null);
       }
     };
     
@@ -166,13 +157,14 @@ function App() {
       console.log('Updated messages:', updatedMessages);
       console.log('=====================');
       
-      // Send message with conversation history and authentication
+      // Send message with conversation history - authentication handled by cookies
       const response = await fetch("http://localhost:3001/api/chat", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
+          "Content-Type": "application/json"
+          // Removed Authorization header - authentication now via httpOnly cookie
         },
+        credentials: 'include', // This sends the httpOnly cookie automatically
         body: JSON.stringify({ 
           message: messageToSend,
           conversationHistory: updatedMessages,
@@ -182,6 +174,7 @@ function App() {
       
       if (response.status === 401 || response.status === 403) {
         // Token expired or invalid, logout user
+        console.log('❌ Authentication failed - logging out user');
         handleLogout();
         return;
       }
@@ -220,23 +213,39 @@ function App() {
     await sendMessageWithContext(messageToSend);
   };
 
-  const handleLoginSuccess = (userData, authToken) => {
+  // Updated to handle cookie-based auth - no token parameter needed
+  const handleLoginSuccess = (userData) => {
     setUser(userData);
-    setToken(authToken);
+    // No need to set token - it's now in httpOnly cookie
     setMessages([
       { text: `Hello ${userData.username}! I'm Jarvis. How can I assist you today?`, sender: "bot" }
     ]);
+    
+    console.log('✅ Login successful - authentication cookie set');
   };
 
-  const handleLogout = () => {
-    // Clear all stored data
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('user_info');
-    localStorage.removeItem(`jarvis_conversation_${user?.id}`);
+  const handleLogout = async () => {
+    try {
+      // Call the logout endpoint to clear the httpOnly cookie
+      await fetch('http://localhost:3001/api/logout', {
+        method: 'POST',
+        credentials: 'include' // Include cookies in the request
+      });
+      
+      console.log('✅ Logout successful - authentication cookie cleared');
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Even if the API call fails, we should still clear local state
+    }
+    
+    // Clear conversation from localStorage
+    if (user?.id) {
+      localStorage.removeItem(`jarvis_conversation_${user.id}`);
+    }
     
     // Reset state
     setUser(null);
-    setToken(null);
+    // No need to clear token - it was in httpOnly cookie
     setMessages([]);
     setInput("");
     
@@ -250,7 +259,9 @@ function App() {
   const clearConversation = () => {
     const initialMessage = { text: `Hello ${user.username}! I'm Jarvis. How can I assist you today?`, sender: "bot" };
     setMessages([initialMessage]);
-    localStorage.removeItem(`jarvis_conversation_${user.id}`);
+    if (user?.id) {
+      localStorage.removeItem(`jarvis_conversation_${user.id}`);
+    }
   };
 
   // Show authentication page if user is not logged in
@@ -264,7 +275,6 @@ function App() {
       <div className="chat-header">
         <div>
           <span>Jarvis Chat</span>
-          
         </div>
         <div className="status-indicators">
           <span className={`status-badge ${isAwake ? 'awake' : 'listening'}`}>
@@ -292,8 +302,7 @@ function App() {
       </div>
       
       <div className="chat-input">
-
-        <button1 onClick={handleLogout} className="logout-button">Logout</button1>
+        <button onClick={handleLogout} className="logout-button">Logout</button>
 
         <input
           type="text"

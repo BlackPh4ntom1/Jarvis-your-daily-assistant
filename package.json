@@ -3,6 +3,7 @@
     "@picovoice/porcupine-web": "^3.0.3",
     "@picovoice/web-voice-processor": "^4.0.9",
     "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
     "jsonwebtoken": "^9.0.2",
     "react-speech-recognition": "^4.0.1",
     "sqlite3": "^5.1.7"

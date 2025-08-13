@@ -29,23 +29,26 @@ const AuthPage = ({ onLoginSuccess }) => {
         ? { email: formData.email, password: formData.password }
         : { username: formData.username, email: formData.email, password: formData.password };
 
-      const response = await fetch(`http://localhost:3001${endpoint}`, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include', // THIS IS THE KEY CHANGE - enables cookies
         body: JSON.stringify(body)
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        // Store token in localStorage
-        localStorage.setItem('auth_token', data.token);
-        localStorage.setItem('user_info', JSON.stringify(data.user));
+        // NO MORE localStorage - the token is now in an httpOnly cookie
+        // localStorage.setItem('auth_token', data.token); // REMOVED
+        // localStorage.setItem('user_info', JSON.stringify(data.user)); // REMOVED
         
-        // Call success callback
-        onLoginSuccess(data.user, data.token);
+        console.log('✅ Authentication successful - token stored in httpOnly cookie');
+        
+        // Call success callback with user data only (no token needed)
+        onLoginSuccess(data.user);
       } else {
         setError(data.message || 'Authentication failed');
       }
@@ -82,7 +85,6 @@ const AuthPage = ({ onLoginSuccess }) => {
                 name="username"
                 value={formData.username}
                 onChange={handleInputChange}
-                
                 placeholder="Choose a username"
                 required={!isLogin}
               />
@@ -96,7 +98,6 @@ const AuthPage = ({ onLoginSuccess }) => {
               name="email"
               value={formData.email}
               onChange={handleInputChange}
-            
               placeholder="Enter your email"
               required
             />
@@ -121,7 +122,7 @@ const AuthPage = ({ onLoginSuccess }) => {
             type="submit" 
             disabled={isLoading}
           >
-            {isLoading ? ' Processing...' : (isLogin ? ' Sign In' : ' Create Account')}
+            {isLoading ? 'Processing...' : (isLogin ? 'Sign In' : 'Create Account')}
           </button>
         </form>
 

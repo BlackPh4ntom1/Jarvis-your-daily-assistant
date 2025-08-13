@@ -4,11 +4,21 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const cookieParser = require('cookie-parser'); // Add this package
 const { Pool } = require('pg');
 
 const app = express();
-app.use(cors());
+
+// CORS configuration - IMPORTANT: Must include credentials and specific origin
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:5173', // Your frontend URL
+  credentials: true, // This is crucial for cookies to work
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
+app.use(cookieParser()); // Add cookie parser middleware
 
 // PostgreSQL connection
 const pool = new Pool({
@@ -33,110 +43,20 @@ pool.connect((err, client, release) => {
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-this-in-production';
 
-// Initialize database tables
-const initDatabase = async () => {
-  const client = await pool.connect();
-  
-  try {
-    await client.query('BEGIN');
-
-    // Create users table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Create conversations table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS conversations (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        session_id VARCHAR(255),
-        message TEXT NOT NULL,
-        response TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Create user_sessions table for tracking active sessions
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS user_sessions (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        session_token VARCHAR(255) UNIQUE NOT NULL,
-        expires_at TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Create indexes separately
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)
-    `);
-    
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_conversations_session_id ON conversations(session_id)
-    `);
-    
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at)
-    `);
-    
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)
-    `);
-    
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token)
-    `);
-    
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)
-    `);
-
-    // Create function to update updated_at timestamp
-    await client.query(`
-      CREATE OR REPLACE FUNCTION update_updated_at_column()
-      RETURNS TRIGGER AS $$
-      BEGIN
-          NEW.updated_at = CURRENT_TIMESTAMP;
-          RETURN NEW;
-      END;
-      $$ language 'plpgsql';
-    `);
-
-    // Create trigger for users table
-    await client.query(`
-      DROP TRIGGER IF EXISTS update_users_updated_at ON users;
-      CREATE TRIGGER update_users_updated_at 
-        BEFORE UPDATE ON users 
-        FOR EACH ROW 
-        EXECUTE FUNCTION update_updated_at_column();
-    `);
-
-    await client.query('COMMIT');
-    console.log('✅ Database tables initialized successfully');
-
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Error initializing database:', error);
-    throw error;
-  } finally {
-    client.release();
-  }
+// Cookie configuration
+const COOKIE_OPTIONS = {
+  httpOnly: true, // Cannot be accessed via JavaScript
+  secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Cross-site cookies in production
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
+  path: '/'
 };
 
-// Middleware to verify JWT token
+// Modified middleware to verify JWT token from cookies
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  // Try to get token from cookie first, then fallback to Authorization header
+  const token = req.cookies.authToken || 
+                (req.headers['authorization'] && req.headers['authorization'].split(' ')[1]);
 
   if (!token) {
     return res.status(401).json({ message: 'Access token required' });
@@ -144,6 +64,8 @@ const authenticateToken = (req, res, next) => {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
+      // If token is invalid, clear the cookie
+      res.clearCookie('authToken', COOKIE_OPTIONS);
       return res.status(403).json({ message: 'Invalid or expired token' });
     }
     req.user = user;
@@ -151,7 +73,7 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Database helper functions
+// Database helper functions (unchanged)
 const findUserByEmail = async (email) => {
   const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
   return result.rows[0];
@@ -205,7 +127,7 @@ const getUserStats = async (userId) => {
   return result.rows[0];
 };
 
-// Auth Routes
+// Modified Auth Routes
 app.post('/api/register', async (req, res) => {
   const { username, email, password } = req.body;
 
@@ -251,17 +173,20 @@ app.post('/api/register', async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    // Set httpOnly cookie
+    res.cookie('authToken', token, COOKIE_OPTIONS);
+
     console.log(`✅ New user registered: ${username} (${email}) - ID: ${newUser.id}`);
 
     res.status(201).json({
       message: 'User created successfully',
-      token,
       user: { 
         id: newUser.id, 
         username: newUser.username, 
         email: newUser.email,
         createdAt: newUser.created_at
       }
+      // Note: No token in response body - it's in the cookie
     });
 
   } catch (error) {
@@ -301,17 +226,20 @@ app.post('/api/login', async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    // Set httpOnly cookie
+    res.cookie('authToken', token, COOKIE_OPTIONS);
+
     console.log(`✅ User logged in: ${user.username} (ID: ${user.id})`);
 
     res.json({
       message: 'Login successful',
-      token,
       user: { 
         id: user.id, 
         username: user.username, 
         email: user.email,
         createdAt: user.created_at
       }
+      // Note: No token in response body - it's in the cookie
     });
 
   } catch (error) {
@@ -320,7 +248,13 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Verify token endpoint
+// New logout endpoint
+app.post('/api/logout', (req, res) => {
+  res.clearCookie('authToken', COOKIE_OPTIONS);
+  res.json({ message: 'Logged out successfully' });
+});
+
+// Verify token endpoint (now reads from cookie)
 app.get('/api/verify-token', authenticateToken, async (req, res) => {
   try {
     // Get fresh user data from database
@@ -494,6 +428,106 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   }
 });
 
+// Initialize database tables
+const initDatabase = async () => {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+
+    // Create users table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create conversations table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        session_id VARCHAR(255),
+        message TEXT NOT NULL,
+        response TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create user_sessions table for tracking active sessions
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_sessions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        session_token VARCHAR(255) UNIQUE NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create indexes separately
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)
+    `);
+    
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_conversations_session_id ON conversations(session_id)
+    `);
+    
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at)
+    `);
+    
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)
+    `);
+    
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token)
+    `);
+    
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)
+    `);
+
+    // Create function to update updated_at timestamp
+    await client.query(`
+      CREATE OR REPLACE FUNCTION update_updated_at_column()
+      RETURNS TRIGGER AS $$
+      BEGIN
+          NEW.updated_at = CURRENT_TIMESTAMP;
+          RETURN NEW;
+      END;
+      $$ language 'plpgsql';
+    `);
+
+    // Create trigger for users table
+    await client.query(`
+      DROP TRIGGER IF EXISTS update_users_updated_at ON users;
+      CREATE TRIGGER update_users_updated_at 
+        BEFORE UPDATE ON users 
+        FOR EACH ROW 
+        EXECUTE FUNCTION update_updated_at_column();
+    `);
+
+    await client.query('COMMIT');
+    console.log('✅ Database tables initialized successfully');
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('❌ Error initializing database:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🔄 Shutting down gracefully...');
@@ -509,6 +543,7 @@ initDatabase().then(() => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
     console.log('✅ JWT Secret configured:', JWT_SECRET ? 'YES' : 'NO');
     console.log('✅ PostgreSQL database connected');
+    console.log('✅ httpOnly cookies enabled');
   });
 }).catch(err => {
   console.error('❌ Failed to initialize database:', err);
