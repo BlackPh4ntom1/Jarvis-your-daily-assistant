@@ -302,7 +302,7 @@ function App() {
       </div>
       
       <div className="chat-input">
-        <button onClick={handleLogout} className="logout-button">Logout</button>
+        <button1 onClick={handleLogout} className="logout-button">Logout</button1>
 
         <input
           type="text"
