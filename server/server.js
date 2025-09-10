@@ -183,17 +183,19 @@ app.get('/api/verify-token', authenticateToken, async (req, res) => {
   }
 });
 
-// ======================= CHAT ROUTE WITH WEATHER =======================
+// Weather Route
 app.post('/api/chat', authenticateToken, async (req, res) => {
   const { message, conversationHistory, sessionId } = req.body;
   const userId = req.user.userId;
 
   try {
-    let messages = [{
-      role: 'system',
-      content: `You are Jarvis, an AI assistant for ${req.user.username}.
-      If you need real-time weather, reply ONLY with description ` //{"action":"get_current_weather","city":"London"}
-    }];
+   let messages = [{
+  role: 'system',
+  content: `You are Jarvis, an AI assistant for ${req.user.username}.
+If the user requests current weather, respond only with description:`
+}];
+
+
 
     if (conversationHistory && conversationHistory.length > 1) {
       const past = conversationHistory.slice(0, -1).slice(-15);

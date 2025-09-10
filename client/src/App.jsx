@@ -312,6 +312,7 @@ function App() {
           onKeyDown={e => { if (e.key === "Enter") handleManualSend() }}
         />
         <button onClick={handleManualSend}>Send</button>
+        <button onClick={clearConversation} className='clear-button'>New</button>
       </div>
     </div>
   )
